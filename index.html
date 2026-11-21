@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="description" content="Interactive 6-DOF robotics workbench: Denavit-Hartenberg forward kinematics, damped least squares inverse kinematics, singularity analysis, quintic trajectories and URDF export.">
+  <title>KineChain 6DOF | Spatial Robotics Workbench</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#workbench">Skip to workbench</a>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&#9878;</span>
+      <div>
+        <h1>KineChain 6DOF</h1>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="engineBadge" class="badge">engine loading</span>
+      <button id="themeToggle" class="btn btn-ghost" type="button" aria-pressed="false">Light theme</button>
+      <button id="helpToggle" class="btn btn-ghost" type="button" aria-expanded="false" aria-controls="helpPanel">Guide</button>
+    </div>
+  </header>
+
+  <section id="helpPanel" class="help-panel" hidden>
+    <h2>How to use this workbench</h2>
+    <p>Everything on this page is computed locally by the zero-dependency engine in <code>src/robotics.js</code>. No network, no telemetry.</p>
+    <ol>
+      <li>Pick a robot and a preset pose, or drive each joint slider directly.</li>
+      <li>The two views redraw immediately: side projection (X,Z) and top projection (X,Y).</li>
+      <li>Set a Cartesian target and run damped least squares inverse kinematics, with optional sphere obstacles.</li>
+      <li>Plan a quintic pick-and-place trajectory, then export the model as URDF or the run as JSON/CSV.</li>
+    </ol>
+    <p class="small">Keyboard: every control is reachable by Tab, sliders respond to arrow keys, and buttons activate on Space or Enter. Focus rings are always visible.</p>
+  </section>
+
+  <main id="workbench" class="layout">
+    <aside class="panel controls-panel" aria-label="Robot controls">
+      <div class="panel-head">
+        <h2>Rig</h2>
+        <span class="panel-tag">local engine</span>
+      </div>
+
+      <div class="control-block">
+        <label for="robotSelect">Robot</label>
+        <select id="robotSelect">
+          <option value="PUMA-560">PUMA-560 (6 revolute)</option>
+          <option value="UR5e">UR5e (6 revolute)</option>
+          <option value="SCARA-4">SCARA-4 (2R + 1P + 1R)</option>
+        </select>
+      </div>
+
+      <div class="control-block">
+        <label for="presetSelect">Pose preset</label>
+        <select id="presetSelect"></select>
+        <p id="presetNote" class="hint"></p>
+      </div>
+
+      <div class="control-block" id="jointBlock">
+        <h3>Joint space</h3>
+        <div id="jointSliders"></div>
+        <div class="button-grid">
+          <button id="homeBtn" class="btn" type="button">Home (zero)</button>
+          <button id="randBtn" class="btn" type="button">Random in limits</button>
+        </div>
+      </div>
+
+      <div class="control-block">
+        <h3>Cartesian target</h3>
+        <div class="control-row">
+          <label for="tgtX">x (m)</label><input id="tgtX" type="number" step="0.01" value="0.30">
+        </div>
+        <div class="control-row">
+          <label for="tgtY">y (m)</label><input id="tgtY" type="number" step="0.01" value="0.10">
+        </div>
+        <div class="control-row">
+          <label for="tgtZ">z (m)</label><input id="tgtZ" type="number" step="0.01" value="0.40">
+        </div>
+        <div class="control-row">
+          <label for="tgtRoll">roll (rad)</label><input id="tgtRoll" type="number" step="0.01" value="0.00">
+        </div>
+        <div class="control-row">
+          <label for="tgtPitch">pitch (rad)</label><input id="tgtPitch" type="number" step="0.01" value="0.00">
+        </div>
+        <div class="control-row">
+          <label for="tgtYaw">yaw (rad)</label><input id="tgtYaw" type="number" step="0.01" value="0.00">
+        </div>
+        <div class="button-grid">
+          <button id="solveIkBtn" class="btn btn-primary" type="button">Solve IK</button>
+          <button id="targetFromPoseBtn" class="btn" type="button">Target = current</button>
+        </div>
+      </div>
+
+      <div class="control-block">
+        <h3>Sphere obstacle</h3>
+        <div class="control-row">
+          <label for="obsX">x (m)</label><input id="obsX" type="number" step="0.01" value="0.20">
+        </div>
+        <div class="control-row">
+          <label for="obsY">y (m)</label><input id="obsY" type="number" step="0.01" value="0.05">
+        </div>
+        <div class="control-row">
+          <label for="obsZ">z (m)</label><input id="obsZ" type="number" step="0.01" value="0.30">
+        </div>
+        <div class="control-row">
+          <label for="obsR">radius (m)</label><input id="obsR" type="number" step="0.01" min="0.01" max="0.5" value="0.08">
+        </div>
+        <div class="button-grid">
+          <button id="obsAddBtn" class="btn" type="button">Add obstacle</button>
+          <button id="obsClearBtn" class="btn" type="button">Clear all</button>
+        </div>
+        <p id="obsList" class="hint"></p>
+      </div>
+
+      <div class="control-block">
+        <h3>Trajectory</h3>
+        <div class="control-row">
+          <label for="wpSelect">Pick waypoints</label>
+          <select id="wpSelect">
+            <option value="home-pick-place">home to pick to place to home</option>
+            <option value="home-pick">home to pick to home</option>
+          </select>
+        </div>
+        <div class="button-grid">
+          <button id="planBtn" class="btn" type="button">Plan quintic</button>
+          <button id="playBtn" class="btn" type="button" aria-pressed="false">Play</button>
+        </div>
+        <div class="control-row">
+          <label for="scrubSlider">Trajectory time</label>
+          <output id="scrubOut">0.00 s</output>
+          <input id="scrubSlider" type="range" min="0" max="1" step="0.005" value="0">
+        </div>
+      </div>
+
+      <div id="errorStatus" class="error-status" role="alert" hidden></div>
+    </aside>
+
+    <section class="stage" aria-label="Analysis workspace">
+      <div class="panel status-panel">
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-label">End position</span><strong id="statPos">-</strong></div>
+          <div class="stat"><span class="stat-label">End rpy</span><strong id="statRpy">-</strong></div>
+          <div class="stat"><span class="stat-label">Manipulability</span><strong id="statManip">-</strong></div>
+          <div class="stat"><span class="stat-label">Min singular value</span><strong id="statSigma">-</strong></div>
+          <div class="stat"><span class="stat-label">Singularity</span><strong id="statSing">-</strong></div>
+          <div class="stat"><span class="stat-label">Collisions</span><strong id="statColl">-</strong></div>
+        </div>
+        <p id="statusLine" class="status-line" role="status"></p>
+      </div>
+
+      <div class="plot-grid">
+        <div class="panel plot-panel">
+          <div class="plot-head">
+            <h3>Side view (X,Z)</h3>
+            <span class="plot-note">forward kinematics chain</span>
+          </div>
+          <canvas id="sideCanvas" width="560" height="420" tabindex="0" role="img" aria-label="Side projection of the robot arm with joint positions and obstacles"></canvas>
+          <p class="readout" id="sideReadout"></p>
+        </div>
+        <div class="panel plot-panel">
+          <div class="plot-head">
+            <h3>Top view (X,Y)</h3>
+            <span class="plot-note">base frame projection</span>
+          </div>
+          <canvas id="topCanvas" width="560" height="420" tabindex="0" role="img" aria-label="Top projection of the robot arm with joint positions and obstacles"></canvas>
+          <p class="readout" id="topReadout"></p>
+        </div>
+      </div>
+
+      <div class="panel plot-panel">
+        <div class="plot-head">
+          <h3>Geometric Jacobian</h3>
+          <span class="plot-note">rows vx vy vz, wx wy wz at current q</span>
+        </div>
+        <div class="table-scroll">
+          <table id="jacobianTable">
+            <caption>6 x n Jacobian mapping joint rates to end-effector twist</caption>
+            <thead><tr id="jacHead"></tr></thead>
+            <tbody id="jacBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel export-panel">
+        <div class="export-head">
+          <h3>URDF export</h3>
+          <div class="export-buttons">
+            <button id="exportUrdfBtn" class="btn" type="button">Refresh URDF</button>
+            <button id="dlUrdfBtn" class="btn" type="button">Download .urdf</button>
+            <button id="dlJsonBtn" class="btn" type="button">Download run JSON</button>
+            <button id="dlCsvBtn" class="btn" type="button">Download trajectory CSV</button>
+          </div>
+        </div>
+        <textarea id="urdfOut" rows="12" spellcheck="false" aria-label="Generated URDF XML" readonly></textarea>
+        <p id="urdfStat" class="hint"></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>KineChain 6DOF workbench, fully offline.</span>
+    <span id="footNote">engine idle</span>
+  </footer>
+
+  <script src="src/robotics.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
