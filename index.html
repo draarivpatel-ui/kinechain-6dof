@@ -3,7 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- frame-ancestors cannot be expressed in a meta-delivered CSP; the file
+       is served offline with no server headers, so click framing is blocked
+       by X-Frame-Options equivalents only where a host sets them. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="data:,">
   <meta name="description" content="Interactive 6-DOF robotics workbench: Denavit-Hartenberg forward kinematics, damped least squares inverse kinematics, singularity analysis, quintic trajectories and URDF export.">
   <title>KineChain 6DOF | Spatial Robotics Workbench</title>
   <link rel="stylesheet" href="style.css">

@@ -430,10 +430,13 @@
     els.playBtn.textContent = state.playing ? 'Pause' : 'Play';
     if (state.playing) tick();
   });
-  function tick() {
-    if (!state.playing || !state.plan) return;
+  let lastTick = null;
+  function tick(ts) {
+    if (!state.playing || !state.plan) { lastTick = null; return; }
     applyPlanTime(state.playT);
-    state.playT += 1 / 30;
+    const dt = typeof ts === 'number' && lastTick !== null ? (ts - lastTick) / 1000 : 1 / 60;
+    lastTick = typeof ts === 'number' ? ts : null;
+    state.playT += Math.min(Math.max(dt, 0), 0.1);
     if (state.playT > state.plan.totalTime) {
       state.playing = false;
       els.playBtn.setAttribute('aria-pressed', 'false');

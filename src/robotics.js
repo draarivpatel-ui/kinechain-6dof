@@ -519,6 +519,7 @@
   }
 
   function dhParams(robot, q) {
+    if (!q || q.length !== robot.dof) throw new RangeError('expected ' + robot.dof + ' joint values for ' + (robot.name || 'robot'));
     return robot.links.map((link, i) => ({
       a: link.a,
       alpha: link.alpha,
@@ -561,12 +562,26 @@
         color: l.color || ['#3987e5', '#d95926', '#199e70', '#eda100', '#8b5cf6', '#ef476f', '#06b6d4'][i % 7]
       };
     });
+    for (const [i, l] of links.entries()) {
+      for (const key of ['velocity', 'effort', 'mass', 'radius', 'length']) {
+        if (!Number.isFinite(l[key])) throw new RangeError('link ' + i + ' has nonfinite ' + key);
+      }
+      if (l.radius < 0 || l.length < 0 || l.mass < 0) {
+        throw new RangeError('link ' + i + ' has a negative physical dimension');
+      }
+    }
+    const checkPose = (p, label) => {
+      if (!p) return poseIdentity();
+      for (const v of (p.t || [])) if (!Number.isFinite(v)) throw new RangeError(label + ' translation is nonfinite');
+      for (const row of (p.R || [])) for (const v of (row || [])) if (!Number.isFinite(v)) throw new RangeError(label + ' rotation is nonfinite');
+      return pose(p.R, p.t);
+    };
     const robot = {
       name: o.name || 'robot',
       dof: links.length,
       links: links,
-      base: o.base ? pose(o.base.R, o.base.t) : poseIdentity(),
-      tool: o.tool ? pose(o.tool.R, o.tool.t) : poseIdentity(),
+      base: checkPose(o.base, 'base'),
+      tool: checkPose(o.tool, 'tool'),
       description: o.description || '',
       units: o.units || 'm'
     };
@@ -578,8 +593,9 @@
   function forwardKinematics(robot, q) {
     const n = robot.dof;
     if (!q || q.length !== n) throw new RangeError('expected ' + n + ' joint values for ' + robot.name);
-    const frames = [robot.base];
-    let cur = robot.base;
+    for (const v of q) if (!Number.isFinite(v)) throw new RangeError('forwardKinematics joint values must be finite');
+    const frames = [pose(robot.base.R.map(row => row.slice()), robot.base.t.slice())];
+    let cur = frames[0];
     for (let i = 0; i < n; i++) {
       const link = robot.links[i];
       const p = dhParams(robot, q)[i];
@@ -645,6 +661,9 @@
   // z_i and 0 for prismatic joints.
   // ============================================================
   function jointAxis(robot, q, i) {
+    if (!Number.isInteger(i) || i < 0 || i > robot.dof - 1) {
+      throw new RangeError('jointAxis expects a joint index in [0, ' + (robot.dof - 1) + '], got ' + i);
+    }
     const fk = forwardKinematics(robot, q);
     const f = fk.frames[i];
     const z = matVec(f.R, [0, 0, 1]);
@@ -715,9 +734,11 @@
   // measure. The ellipsoid axes are the singular values of J.
   // ============================================================
   function manipulability(robot, q) {
-    const J = jacobian(robot, q);
-    const JJt = matMul(J, matTranspose(J));
-    return Math.sqrt(Math.max(0, matDet(JJt)));
+    // Product of the singular values: equals sqrt(det(J J^T)) for a square
+    // Jacobian and stays meaningful for lower-DOF arms where det(J J^T) is
+    // identically zero.
+    const sv = singularValues(jacobian(robot, q));
+    return sv.reduce((a, v) => a * v, 1);
   }
 
   function manipulabilityProfile(robot, samples) {
@@ -756,19 +777,25 @@
     const cols = [];
     const smax = sv[sv.length - 1] || 1;
     for (let k = 0; k < top; k++) {
-      const c = sv.length - 1 - k;
-      axes.push(sv[c]);
+      // eigSymmetric returns 6 eigenpairs sorted ascending; the left singular
+      // direction for the k-th largest sigma is the matching eigenvector.
+      const c = e.values.length - 1 - k;
+      const sigma = sv[sv.length - 1 - k];
+      axes.push(sigma);
       const dir = [];
       for (let r = 0; r < 3; r++) dir.push(e.vectors[r][c]);
-      cols.push({ axis: normalize(dir), length: smax > 1e-15 ? sv[c] / smax : 0, sigma: sv[c] });
+      cols.push({ axis: normalize(dir), length: smax > 1e-15 ? sigma / smax : 0, sigma: sigma });
     }
-    const smin = sv.length - top >= 0 ? sv[sv.length - top] : 0;
+    const smin = sv.length ? sv[0] : 0;
     return { axes: axes, basis: cols, cond: smin > 1e-15 ? smax / smin : Infinity };
   }
 
   function detectSingularity(robot, q, options) {
     const o = options || {};
-    const tol = o.tolerance === undefined ? 1e-3 : o.tolerance;
+    // Tolerance is a numerical rank threshold, not a workspace parameter:
+    // values above 1 (or nonfinite/nonpositive) are degenerate and fall back
+    // to the default so they cannot zero the rank.
+    const tol = Number.isFinite(o.tolerance) && o.tolerance > 0 && o.tolerance <= 1 ? o.tolerance : 1e-3;
     const w = manipulability(robot, q);
     const sv = singularValues(jacobian(robot, q));
     const smin = sv.length ? sv[0] : 0;
@@ -823,6 +850,7 @@
     const t = tol === undefined ? 1e-9 : tol;
     for (let i = 0; i < robot.dof; i++) {
       const l = robot.links[i];
+      if (!Number.isFinite(q[i])) return false;
       if (q[i] < l.lo - t || q[i] > l.hi + t) return false;
     }
     return true;
@@ -847,9 +875,11 @@
       const p = [ob.x || 0, ob.y || 0, ob.z || 0];
       const r = ob.radius === undefined ? 0.1 : ob.radius;
       const margin = ob.margin === undefined ? 0.05 : ob.margin;
-      const sampleFrom = ob.from === undefined ? 0 : ob.from;
-      const sampleTo = ob.to === undefined ? n : ob.to;
-      for (let i = sampleFrom; i <= sampleTo && i <= n; i++) {
+      const rawFrom = Number(ob.from === undefined ? 0 : ob.from);
+      const rawTo = Number(ob.to === undefined ? n : ob.to);
+      const sampleFrom = clamp(Math.round(Number.isFinite(rawFrom) ? rawFrom : 0), 0, n);
+      const sampleTo = clamp(Math.round(Number.isFinite(rawTo) ? rawTo : n), 0, n);
+      for (let i = Math.min(sampleFrom, sampleTo); i <= Math.max(sampleFrom, sampleTo); i++) {
         const o = frames[i].t;
         const d = norm(vecSub(o, p));
         if (d < r + margin) {
@@ -927,9 +957,15 @@
     const obsWeight = o.obstacleWeight === undefined ? 1 : o.obstacleWeight;
     const useLimits = o.useLimits !== false;
     const weightRot = o.weightRotation === undefined ? 1 : o.weightRotation;
+    if (!Number.isFinite(weightRot) || weightRot < 0) throw new RangeError('weightRotation must be nonnegative');
     const stepScale = o.stepScale === undefined ? 1 : o.stepScale;
-    const limitMargin = o.limitMargin === undefined ? 0.01 : o.limitMargin;
+    const rawMargin = o.limitMargin === undefined ? 0.01 : o.limitMargin;
+    const limitMargin = Number.isFinite(rawMargin) ? clamp(rawMargin, 0, 0.45) : 0.01;
     const maxStep = o.maxStep === undefined ? 0.5 : o.maxStep;
+    if (target && target.t && target.R) {
+      for (const v of target.t) if (!Number.isFinite(v)) throw new RangeError('IK target translation is nonfinite');
+      for (const row of target.R) for (const v of row) if (!Number.isFinite(v)) throw new RangeError('IK target rotation is nonfinite');
+    }
     // Convergence is tested on position (metres) and rotation (radians)
     // separately, so relaxing one side, for example a position only solve
     // with rotTol very large, cannot mask a real residual on the other.
@@ -946,8 +982,11 @@
       ? qq => norm(twistError(r, qq, target)) + obsWeight * obstaclePotential(r, qq, obstacles)
       : null;
 
-    let q = (q0 ? q0.slice() : zeros(n));
-    for (let i = 0; i < n; i++) q[i] = clamp(q[i], r.links[i].lo, r.links[i].hi);
+    let q = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const v = q0 && Number.isFinite(q0[i]) ? q0[i] : 0;
+      q[i] = useLimits ? clamp(v, r.links[i].lo, r.links[i].hi) : v;
+    }
     const gate = (qq, dq) => applyLimitGate(r, qq, dq, useLimits, limitMargin);
     let eVec = twistError(r, q, target);
     let error = norm(eVec);
@@ -973,14 +1012,16 @@
       const scoreAfter = scoreOf ? scoreOf(scaled) : errAfter;
       log.push({ iter: iter, error: errAfter, lambda: c.lambda });
       // Accept only if the combined objective improves, else shrink the step.
-      if (scoreAfter > score) {
+      // A nonfinite score counts as "worse" so NaN candidates can never be
+      // accepted by accident.
+      if (!(Number.isFinite(scoreAfter) && scoreAfter <= score)) {
         let accepted = false;
         for (const shrink of [0.5, 0.25, 0.1]) {
           const trial = c.q.map((v, i) => q[i] + (v - q[i]) * shrink);
           const tev = twistError(r, trial, target);
           const te = norm(tev);
           const ts = scoreOf ? scoreOf(trial) : te;
-          if (ts <= score) { q = trial; error = te; eVec = tev; score = ts; accepted = true; break; }
+          if (Number.isFinite(ts) && ts <= score) { q = trial; error = te; eVec = tev; score = ts; accepted = true; break; }
         }
         if (!accepted) {
           log.push({ iter: iter, note: 'no improving step, stopping' });
@@ -996,8 +1037,8 @@
       if (errMet(eVec)) { converged = true; }
     }
 
-    // Final projection onto the hard limits.
-    const clamped = clampToLimits(r, q);
+    // Final projection onto the hard limits when they are enforced.
+    const clamped = useLimits ? clampToLimits(r, q) : q;
     if (norm(vecSub(clamped, q)) > 1e-12) {
       q = clamped;
       eVec = twistError(r, q, target);
@@ -1047,11 +1088,16 @@
 
   function solveIKMultiStart(robot, target, options) {
     const o = options || {};
-    const seeds = typeof o.seeds === 'number'
-      ? ikSeeds(getRobot(robot), Math.max(0, Math.floor(o.seeds)))
-      : (o.seeds || ikSeeds(getRobot(robot), 16));
+    const r0 = getRobot(robot);
+    let seedList;
+    if (typeof o.seeds === 'number' && Number.isFinite(o.seeds)) {
+      seedList = ikSeeds(r0, Math.max(0, Math.floor(o.seeds)));
+    } else if (Array.isArray(o.seeds)) {
+      seedList = o.seeds.filter(s => Array.isArray(s));
+    }
+    if (!seedList || !seedList.length) seedList = ikSeeds(r0, 16);
     let best = null;
-    for (const s of seeds) {
+    for (const s of seedList) {
       const r = solveIK(robot, s, target, o);
       if (r.converged) return r;
       if (!best || r.error < best.error) best = r;
@@ -1064,8 +1110,11 @@
     for (const l of robot.links) max += Math.abs(l.a) + Math.abs(l.d);
     const base = robot.base.t;
     const d = norm(vecSub(target.t, base));
+    // Inner dead-zone estimate: never reject interior targets. Signed link
+    // offsets (UR5e-style negative a) used to inflate this bound and produce
+    // false negatives, so only magnitudes participate.
     let min = 0;
-    for (let i = robot.dof - 1; i >= 0; i--) min = Math.max(min - robot.links[i].a, 0);
+    for (let i = robot.dof - 1; i >= 0; i--) min = Math.max(min - Math.abs(robot.links[i].a), 0);
     const tool = norm(robot.tool.t);
     return d >= Math.max(0, min - tool - 0.05) && d <= max + tool + 0.05;
   }
@@ -1201,6 +1250,7 @@
 
   // Cost of a segment, the integral of squared jerk over the duration.
   function segmentJerkCost(T, q0, q1, v0, v1, a0, a1) {
+    if (!Number.isFinite(T) || T <= 0) throw new RangeError('segmentJerkCost needs a positive duration');
     const dv0 = v0 * T, dv1 = v1 * T;
     const da0 = a0 * T * T, da1 = a1 * T * T;
     const c3 = (20 * (q1 - q0) - (12 * dv0 + 8 * dv1) - (3 * da0 - da1)) / 2;
@@ -1244,6 +1294,10 @@
       const v = p.v || zeros(n);
       const a = p.a || zeros(n);
       if (v.length !== n || a.length !== n) throw new RangeError('waypoint ' + i + ' v/a need ' + n + ' values');
+      for (let k = 0; k < n; k++) {
+        if (!Number.isFinite(v[k])) throw new RangeError('waypoint ' + i + ' has a nonfinite velocity');
+        if (!Number.isFinite(a[k])) throw new RangeError('waypoint ' + i + ' has a nonfinite acceleration');
+      }
       return { q: q.slice(), v: v.slice(), a: a.slice() };
     });
     if (pts.length < 2) throw new RangeError('a trajectory needs at least two waypoints');
@@ -1279,17 +1333,18 @@
     }
 
     function sampleAt(t) {
+      const tt = clamp(t, 0, time);
       const q = zeros(n), v = zeros(n), a = zeros(n);
       let seg = segments[0];
-      for (const s of segments) { if (t >= s.t0 && t <= s.t1) { seg = s; break; } seg = s; }
-      const local = clamp(t - seg.t0, 0, seg.duration);
+      for (const s of segments) { if (tt >= s.t0 && tt <= s.t1) { seg = s; break; } seg = s; }
+      const local = clamp(tt - seg.t0, 0, seg.duration);
       for (let i = 0; i < n; i++) {
         const r = quinticSegment(local, seg.duration, seg.from[i], seg.to[i], seg.v0[i], seg.v1[i], seg.a0[i], seg.a1[i]);
         q[i] = r.position;
         v[i] = r.velocity;
         a[i] = r.accel;
       }
-      return { t: t, q: q, dq: v, ddq: a, segment: seg.index };
+      return { t: tt, q: q, dq: v, ddq: a, segment: seg.index };
     }
 
     return {
@@ -1298,6 +1353,9 @@
       totalTime: time,
       sample: sampleAt,
       sampleRange: function (count) {
+        if (count !== undefined && (!Number.isFinite(count) || count < 2 || count > 100000)) {
+          throw new RangeError('sampleRange count must be an integer in [2, 100000]');
+        }
         const out = [];
         const steps = Math.max(2, count || 64);
         for (let i = 0; i <= steps; i++) out.push(sampleAt(time * i / steps));
@@ -1306,7 +1364,9 @@
       velocityLimits: vLimits,
       accelLimits: aLimits,
       jerkLimits: jLim,
-      validity: o.validate ? validateTrajectory(robot, sampleAt, time, o) : null
+      validity: o.validate
+        ? validateTrajectory(robot, sampleAt, time, Object.assign({ velocityLimits: vLimits, accelLimits: aLimits, jerkLimits: jLim }, o))
+        : null
     };
   }
 
@@ -1330,24 +1390,50 @@
     const dt = count > 0 ? totalTime / count : 0;
     const violations = [];
     const collisions = [];
+    const vLim = o.velocityLimits || null;
+    const aLim = o.accelLimits || null;
+    const jLim = o.jerkLimits || null;
     let inLimits = true;
+    let inVelocityLimits = true;
+    let inAccelLimits = true;
+    let inJerkLimits = true;
     let collisionFree = true;
     let maxJerk = 0;
+    let maxVelocity = 0;
+    let maxAccel = 0;
+    let allFinite = true;
     let prev = null;
     for (let i = 0; i <= count; i++) {
       const t = Math.min(totalTime, dt * i);
       const s = sampleAt(t);
       for (let j = 0; j < n; j++) {
         const l = robot.links[j];
+        if (!Number.isFinite(s.q[j]) || !Number.isFinite(s.dq[j]) || !Number.isFinite(s.ddq[j])) {
+          allFinite = false;
+          inLimits = false;
+          if (violations.length < 32) violations.push({ t: t, joint: j, kind: 'nonfinite', value: s.q[j], lo: l.lo, hi: l.hi });
+          continue;
+        }
         if (s.q[j] < l.lo - 1e-9 || s.q[j] > l.hi + 1e-9) {
           inLimits = false;
-          if (violations.length < 32) violations.push({ t: t, joint: j, value: s.q[j], lo: l.lo, hi: l.hi });
+          if (violations.length < 32) violations.push({ t: t, joint: j, kind: 'position', value: s.q[j], lo: l.lo, hi: l.hi });
+        }
+        if (Math.abs(s.dq[j]) > maxVelocity) maxVelocity = Math.abs(s.dq[j]);
+        if (Math.abs(s.ddq[j]) > maxAccel) maxAccel = Math.abs(s.ddq[j]);
+        if (vLim && s.dq[j] > vLim[j] * 1.05 + 1e-9) {
+          inVelocityLimits = false;
+          if (violations.length < 32) violations.push({ t: t, joint: j, kind: 'velocity', value: s.dq[j], limit: vLim[j] });
+        }
+        if (aLim && s.ddq[j] > aLim[j] * 1.05 + 1e-9) {
+          inAccelLimits = false;
+          if (violations.length < 32) violations.push({ t: t, joint: j, kind: 'acceleration', value: s.ddq[j], limit: aLim[j] });
         }
       }
       if (prev && dt > 1e-12) {
         for (let j = 0; j < n; j++) {
           const jerk = Math.abs((s.ddq[j] - prev.ddq[j]) / (t - prev.t));
           if (jerk > maxJerk) maxJerk = jerk;
+          if (jLim && jerk > jLim[j] * 1.05 + 1e-9) inJerkLimits = false;
         }
       }
       if (o.obstacles && o.obstacles.length) {
@@ -1361,8 +1447,14 @@
     }
     return {
       inLimits: inLimits,
+      inVelocityLimits: inVelocityLimits,
+      inAccelLimits: inAccelLimits,
+      inJerkLimits: inJerkLimits,
       collisionFree: collisionFree,
+      allFinite: allFinite,
       maxJerk: maxJerk,
+      maxVelocity: maxVelocity,
+      maxAccel: maxAccel,
       violations: violations,
       collisions: collisions,
       sampleCount: count + 1,
@@ -1400,7 +1492,7 @@
   function linkSamplePoints(robot, q, samplesPerLink) {
     const fk = forwardKinematics(robot, q).frames;
     const pts = [];
-    const n = samplesPerLink === undefined ? 8 : samplesPerLink;
+    const n = samplesPerLink === undefined ? 8 : Math.max(1, Math.round(samplesPerLink));
     for (let i = 0; i < fk.length - 1; i++) {
       const a = fk[i].t, b = fk[i + 1].t;
       const start = i === 0 ? 0 : 1;
@@ -1466,7 +1558,10 @@
   // visual plus collision box per link.
   // ============================================================
   function xmlEscape(s) {
+    // XML 1.0 forbids most control characters even in escaped form, so they
+    // are stripped before the entity passes.
     return String(s)
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -1477,6 +1572,7 @@
   function xmlAttribute(k, v) { return ' ' + k + '="' + xmlEscape(v) + '"'; }
 
   function num(v, p) {
+    if (!Number.isFinite(v)) throw new RangeError('URDF numeric field is not finite');
     const f = Math.pow(10, p === undefined ? 6 : p);
     const n = Math.round(v * f) / f;
     return Object.is(n, -0) ? '0' : String(n);
@@ -1554,8 +1650,8 @@
       const originRpy = matToEuler(jointPose.R);
       const origin = { xyz: jointPose.t, rpy: [originRpy.roll, originRpy.pitch, originRpy.yaw] };
       const axis = [0, 0, 1];
-      const len = l.length || 0.1;
-      const rad = l.radius || 0.04;
+      const len = l.length === undefined ? 0.1 : l.length;
+      const rad = l.radius === undefined ? 0.04 : l.radius;
 
       L.push(two + '<!-- ' + xmlEscape(l.name) + ': a=' + num(l.a) + ' alpha=' + num(l.alpha) + ' d=' + num(l.d) + ' theta=' + num(l.theta) + ' -->');
       L.push(two + '<link name="' + xmlEscape(linkName) + '">');
@@ -1568,7 +1664,7 @@
       L.push(six + '<geometry><cylinder radius="' + num(rad) + '" length="' + num(len) + '"/></geometry>');
       L.push(four + '</collision>');
       L.push(four + '<inertial>');
-      L.push(six + '<mass value="' + num(l.mass || 2) + '"/>');
+      L.push(six + '<mass value="' + num(l.mass === undefined ? 2 : l.mass) + '"/>');
       L.push(six + '<inertia ixx="' + num(0.001) + '" ixy="0" ixz="0" iyy="' + num(0.001) + '" iyz="0" zzz="' + num(0.001) + '"/>');
       L.push(four + '</inertial>');
       L.push(two + '</link>');
@@ -1579,9 +1675,9 @@
       L.push(four + '<child link="' + xmlEscape(linkName) + '"/>');
       L.push(four + '<axis xyz="' + num(axis[0]) + ' ' + num(axis[1]) + ' ' + num(axis[2]) + '"/>');
       if (!isContinuous) {
-        L.push(four + '<limit effort="' + num(l.effort || 100) + '" lower="' + num(l.lo) + '" upper="' + num(l.hi) + '" velocity="' + num(l.velocity || 3) + '"/>');
+        L.push(four + '<limit effort="' + num(l.effort === undefined ? 100 : l.effort) + '" lower="' + num(l.lo) + '" upper="' + num(l.hi) + '" velocity="' + num(l.velocity === undefined ? 3 : l.velocity) + '"/>');
       } else {
-        L.push(four + '<limit effort="' + num(l.effort || 100) + '" velocity="' + num(l.velocity || 3) + '"/>');
+        L.push(four + '<limit effort="' + num(l.effort === undefined ? 100 : l.effort) + '" velocity="' + num(l.velocity === undefined ? 3 : l.velocity) + '"/>');
       }
       L.push(two + '</joint>');
       L.push('');
@@ -1609,21 +1705,40 @@
   // single root element with matched link and joint tags. Self-closing
   // elements such as <link name="world"/> count as their own close.
   function validateURDF(xml) {
-    const raw = String(xml);
+    // Strip comments so injected markup inside <!-- --> cannot inflate the
+    // counts, then require at least one real link besides the robot shell.
+    const raw = String(xml).replace(/<!--[\s\S]*?-->/g, '');
     const links = (raw.match(/<link\b/g) || []).length;
     const linkClose = (raw.match(/<\/link>/g) || []).length;
     const linkSelf = (raw.match(/<link\b[^>]*\/>/g) || []).length;
     const joints = (raw.match(/<joint\b/g) || []).length;
     const jointClose = (raw.match(/<\/joint>/g) || []).length;
     const jointSelf = (raw.match(/<joint\b[^>]*\/>/g) || []).length;
-    const revolute = (raw.match(/type="revolute"/g) || []).length;
-    const continuous = (raw.match(/type="continuous"/g) || []).length;
-    const prismatic = (raw.match(/type="prismatic"/g) || []).length;
-    const fixed = (raw.match(/type="fixed"/g) || []).length;
+    const revolute = (raw.match(/type\s*=\s*["']revolute["']/g) || []).length;
+    const continuous = (raw.match(/type\s*=\s*["']continuous["']/g) || []).length;
+    const prismatic = (raw.match(/type\s*=\s*["']prismatic["']/g) || []).length;
+    const fixed = (raw.match(/type\s*=\s*["']fixed["']/g) || []).length;
     const robotOpen = (raw.match(/<robot\b/g) || []).length;
     const robotClose = (raw.match(/<\/robot>/g) || []).length;
+    // Balance check over real tags: every element must self-close or find a
+    // matching close, which catches nested/mismatched markup the counters miss.
+    const tags = raw.match(/<\/?[A-Za-z][^>]*>/g) || [];
+    const stack = [];
+    let balanced = true;
+    for (const tag of tags) {
+      if (/^<\?/.test(tag) || /\/>$/.test(tag)) continue;
+      if (/^<\//.test(tag)) {
+        const name = tag.slice(2, -1).trim();
+        if (stack.pop() !== name) { balanced = false; break; }
+      } else {
+        stack.push(tag.slice(1).split(/[\s>]/)[0]);
+      }
+    }
+    if (stack.length) balanced = false;
+    const malformed = /<(?![A-Za-z?/!])/.test(raw);
     return {
-      valid: links === linkClose + linkSelf && joints === jointClose + jointSelf &&
+      valid: balanced && !malformed && links >= 1 && links === linkClose + linkSelf &&
+        joints === jointClose + jointSelf &&
         robotOpen === 1 && robotClose === 1 && /^<\?xml/.test(raw) && /<\/robot>\s*$/.test(raw.trim()),
       links: links,
       linkClose: linkClose,
@@ -1640,9 +1755,17 @@
 
   function extractDHRows(xml) {
     const rows = [];
-    const re = /<!--\s*([^<:]+?):\s*a=([-\d.eE+]+)\s+alpha=([-\d.eE+]+)\s+d=([-\d.eE+]+)\s+theta=([-\d.eE+]+)\s*-->/g;
+    const numPat = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
+    const re = new RegExp('<!--\\s*([^<:]+?):\\s*a=(' + numPat + ')\\s+alpha=(' + numPat + ')\\s+d=(' + numPat + ')\\s+theta=(' + numPat + ')\\s*-->', 'g');
+    // A row only counts when its name is a real link name in the same
+    // document, so attacker-appended comments cannot inject phantom rows.
+    const linkNames = new Set();
+    const linkRe = /<link\s+name="([^"]+)"/g;
+    let lm;
+    while ((lm = linkRe.exec(xml)) !== null) linkNames.add(lm[1]);
     let m;
     while ((m = re.exec(xml)) !== null) {
+      if (linkNames.size && !linkNames.has(m[1].trim())) continue;
       rows.push({
         name: m[1].trim(),
         a: parseFloat(m[2]),
@@ -1659,27 +1782,34 @@
   // ============================================================
   function buildPickPlace(robot, segments, options) {
     const o = options || {};
-    const segs = (segments || []).map((s, i) => ({
-      name: s.name || ('phase-' + (i + 1)),
-      q: s.q.slice(),
-      duration: s.duration || 1.0,
-      mode: s.mode || 'space'
-    }));
+    const norm = (s, i, label) => {
+      if (!s || !Array.isArray(s.q)) throw new RangeError(label + ' ' + i + ' needs a joint vector q');
+      return {
+        name: s.name || (label + '-' + (i + 1)),
+        q: s.q.slice(),
+        duration: Number.isFinite(s.duration) && s.duration > 0 ? s.duration : 1.0,
+        mode: s.mode || 'space'
+      };
+    };
+    const segs = (segments || []).map((s, i) => norm(s, i, 'phase'));
+    const via = (o.via || []).map((s, i) => norm(s, i, 'via'));
     const home = o.home || zeros(robot.dof);
-    const via = o.via || [];
-    // Each phase duration is the time the move ARRIVING at that phase takes.
-    // The home approach uses homeDuration (or the first phase duration), and
-    // the final return leg uses returnDuration.
-    const durations = segs.map(s => s.duration);
-    if (!durations.length) durations.push(1.0);
-    durations[0] = o.homeDuration === undefined ? durations[0] : o.homeDuration;
-    durations.push(o.returnDuration === undefined ? 2.0 : o.returnDuration);
+    // Leg durations: home -> via chain -> segs -> home. The approach leg uses
+    // homeDuration (or the first via/phase duration), the return leg uses
+    // returnDuration. Nonpositive values defer to the planner's own timing.
+    const firstDur = via.length ? via[0].duration : (segs.length ? segs[0].duration : 1.0);
+    const durations = [o.homeDuration === undefined ? firstDur : o.homeDuration]
+      .concat(via.slice(1).map(s => s.duration))
+      .concat(segs.map(s => s.duration))
+      .concat([o.returnDuration === undefined ? 2.0 : o.returnDuration]);
+    const wps = [home].concat(via.map(s => s.q), segs.map(s => s.q), [home]);
+    const plan = planTrajectory(robot, wps, { durations: durations });
     return {
       robot: robot.name,
       moves: via.concat(segs),
-      waypoints: [home].concat(segs.map(s => s.q), [home]),
-      totalTime: durations.reduce((a, d) => a + d, 0),
-      plan: planTrajectory(robot, [home].concat(segs.map(s => s.q), [home]), { durations: durations })
+      waypoints: wps,
+      totalTime: plan.totalTime,
+      plan: plan
     };
   }
 

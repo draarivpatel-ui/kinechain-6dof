@@ -199,9 +199,9 @@ test('play advances frames and pause stops them', () => {
   h.get('planBtn').click();
   h.get('playBtn').click();
   assert.equal(h.get('playBtn').textContent, 'Pause');
-  const before = h.get('statPos').textContent;
-  for (let i = 0; i < 8; i++) h.frames(1);
-  assert.notEqual(h.get('statPos').textContent, before);
+  const before = h.get('scrubOut').textContent;
+  h.frames(8);
+  assert.notEqual(h.get('scrubOut').textContent, before);
   h.get('playBtn').click();
   assert.equal(h.get('playBtn').textContent, 'Play');
   h.dispose();

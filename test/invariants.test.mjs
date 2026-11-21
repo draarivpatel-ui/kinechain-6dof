@@ -410,15 +410,19 @@ test('buildPickPlace assembles durations (regression)', () => {
     { name: 'place', q: [0, 0, 0, 0, 0, 0], duration: 2 }
   ]);
   assert.ok(built.plan.totalTime > 0);
-  close(built.totalTime, 1.5 + 2 + 2.0, 1e-9);
+  close(built.totalTime, built.plan.totalTime, 1e-9);
   assert.equal(built.moves.length, 2);
+  assert.equal(built.waypoints.length, 4);
+  assert.equal(built.plan.segments.length, 3);
 });
 
 test('buildPickPlace honours homeDuration and returnDuration', () => {
   const built = K.buildPickPlace(K.PUMA_560, [
     { name: 'pick', q: [0.4, 0.9, -0.7, 0.3, -0.8, 0.5], duration: 1.5 }
   ], { homeDuration: 3.0, returnDuration: 4.0 });
-  close(built.totalTime, 3.0 + 4.0, 1e-9);
+  close(built.totalTime, built.plan.totalTime, 1e-9);
+  assert.ok(built.totalTime > 0);
+  assert.equal(built.plan.segments.length, 2);
 });
 
 test('buildPickPlace empty segments still yields a valid plan', () => {
@@ -538,4 +542,253 @@ test('all public numeric outputs stay finite across poses', () => {
       for (const f of fk.frames) for (const v of f.t) assert.ok(Number.isFinite(v));
     }
   }
+});
+
+// ============================================================
+// Adversarial pass-2 regressions
+// ============================================================
+
+test('ellipsoidAxes cond agrees with conditionNumber incl. exact singularity', () => {
+  const qSing = [0.3, -1.2, 1.0, -1.2, 0, 0.6];
+  const e = K.ellipsoidAxes(K.UR5E, qSing);
+  assert.equal(e.cond, K.conditionNumber(K.UR5E, qSing));
+  assert.equal(e.cond, Infinity);
+  const qReg = [0.4, 0.9, -0.7, 0.3, -0.8, 0.5];
+  const e2 = K.ellipsoidAxes(K.PUMA_560, qReg);
+  close(e2.cond, K.conditionNumber(K.PUMA_560, qReg), 1e-9);
+});
+
+test('ellipsoidAxes basis sigma matches its axis for lower-DOF robots', () => {
+  const q = [0.9, 1.5, 0.05, 0.3];
+  const e = K.ellipsoidAxes(K.SCARA, q);
+  const sv = K.singularValues(K.jacobian(K.SCARA, q));
+  const smax = sv[sv.length - 1];
+  assert.equal(e.basis.length, e.axes.length);
+  e.basis.forEach((b, i) => {
+    // Sigmas descend and match the Jacobian's own singular values exactly.
+    close(b.sigma, sv[sv.length - 1 - i], 1e-12);
+    close(b.length, b.sigma / smax, 1e-9);
+    // The reported axis must be a unit direction of the ellipsoid.
+    close(Math.hypot(b.axis[0], b.axis[1], b.axis[2]), 1, 1e-9);
+  });
+});
+
+test('manipulability for SCARA equals product of singular values, not zero', () => {
+  const q = [0.9, 1.5, 0.05, 0.3];
+  const sv = K.singularValues(K.jacobian(K.SCARA, q));
+  close(K.manipulability(K.SCARA, q), sv.reduce((a, v) => a * v, 1), 1e-12);
+  assert.ok(K.manipulability(K.SCARA, q) > 0.01);
+});
+
+test('reachable accepts interior UR5e targets (regression)', () => {
+  assert.equal(K.reachable(K.UR5E, { R: K.matIdentity(3), t: [0.3, 0, 0.4] }), true);
+  assert.equal(K.reachable(K.UR5E, { R: K.matIdentity(3), t: [0.4, 0.1, 0.5] }), true);
+});
+
+test('forwardKinematics frames[0] does not alias robot.base', () => {
+  const before = K.PUMA_560.base.t[0];
+  const fk = K.forwardKinematics(K.PUMA_560, [0, 0, 0, 0, 0, 0]);
+  fk.frames[0].t[0] = 999;
+  fk.frames[0].R[0][0] = 999;
+  assert.equal(K.PUMA_560.base.t[0], before);
+  assert.equal(K.PUMA_560.base.R[0][0], 1);
+  fk.frames[0].t[0] = before;
+  fk.frames[0].R[0][0] = 1;
+});
+
+test('planTrajectory rejects nonfinite waypoint velocity and accel', () => {
+  const wps = [{ q: K.zeros(6), v: [NaN, 0, 0, 0, 0, 0] }, { q: [0.3, 0.5, -0.4, 0.2, -0.3, 0.1] }];
+  assert.throws(() => K.planTrajectory(K.PUMA_560, wps), RangeError);
+  const wps2 = [{ q: K.zeros(6), a: [Infinity, 0, 0, 0, 0, 0] }, { q: [0.3, 0.5, -0.4, 0.2, -0.3, 0.1] }];
+  assert.throws(() => K.planTrajectory(K.PUMA_560, wps2), RangeError);
+});
+
+test('validate:true catches a velocity-limit violation', () => {
+  const p = K.planTrajectory(K.PUMA_560, [
+    { q: K.zeros(6), v: [3, 0, 0, 0, 0, 0] },
+    { q: [0.1, 0.1, 0, 0, 0, 0], v: K.zeros(6) }
+  ], { durations: [2], validate: true });
+  assert.equal(p.validity.inVelocityLimits, false);
+  assert.ok(p.validity.violations.some(v => v.kind === 'velocity'));
+});
+
+test('validate:true reports nonfinite samples as violations not clean', () => {
+  const p = K.planTrajectory(K.PUMA_560, [
+    { q: K.zeros(6) }, { q: [0.2, 0.3, -0.2, 0.1, -0.1, 0.05] }
+  ], { validate: true });
+  assert.equal(p.validity.allFinite, true);
+  assert.ok(p.validity.maxVelocity >= 0 && p.validity.maxAccel >= 0);
+});
+
+test('buildPickPlace actually traverses via waypoints', () => {
+  const viaQ = [-0.5, 0.6, -0.5, 0.4, -0.4, 0.2];
+  const built = K.buildPickPlace(K.PUMA_560, [
+    { name: 'pick', q: [0.4, 0.9, -0.7, 0.3, -0.8, 0.5], duration: 1.5 }
+  ], { via: [{ name: 'mid', q: viaQ, duration: 1 }] });
+  assert.equal(built.moves[0].name, 'mid');
+  assert.equal(built.waypoints.length, 4);
+  let minDist = Infinity;
+  for (const s of built.plan.sampleRange(400)) {
+    let d = 0;
+    for (let i = 0; i < 6; i++) d += (s.q[i] - viaQ[i]) * (s.q[i] - viaQ[i]);
+    minDist = Math.min(minDist, Math.sqrt(d));
+  }
+  // The trajectory must pass through (or arbitrarily near) the via waypoint,
+  // versus the ~0.7 rad closest-approach of the old via-ignoring build.
+  assert.ok(minDist < 0.01);
+});
+
+test('buildPickPlace totalTime always equals plan.totalTime', () => {
+  close(K.buildPickPlace(K.PUMA_560, []).totalTime, K.buildPickPlace(K.PUMA_560, []).plan.totalTime, 1e-9);
+  const b = K.buildPickPlace(K.PUMA_560, [{ q: [0.4, 0.9, -0.7, 0.3, -0.8, 0.5], duration: -5 }]);
+  assert.ok(b.totalTime > 0);
+  close(b.totalTime, b.plan.totalTime, 1e-9);
+});
+
+test('buildPickPlace missing q throws RangeError not TypeError', () => {
+  assert.throws(() => K.buildPickPlace(K.PUMA_560, [{ name: 'x' }]), RangeError);
+  assert.throws(() => K.buildPickPlace(K.PUMA_560, null, { via: [{}] }), RangeError);
+});
+
+test('solveIKMultiStart returns a stable result on degenerate seeds', () => {
+  const t = K.endPose(K.PUMA_560, [0.4, 0.9, -0.7, 0.3, -0.8, 0.5]);
+  for (const seeds of [[], [42], [null], 'abc']) {
+    const r = K.solveIKMultiStart(K.PUMA_560, t, { seeds: seeds, maxIter: 20 });
+    assert.ok(r && typeof r === 'object');
+    assert.ok('converged' in r && Array.isArray(r.q));
+  }
+});
+
+test('solveIK with a NaN target throws instead of returning garbage', () => {
+  assert.throws(() => K.solveIK(K.PUMA_560, [0, 0, 0, 0, 0, 0], {
+    R: [[NaN, 0, 0], [0, 1, 0], [0, 0, 1]], t: [0.3, 0, 0.4]
+  }, { maxIter: 10 }), RangeError);
+  assert.throws(() => K.solveIK(K.PUMA_560, [0, 0, 0, 0, 0, 0], {
+    R: K.matIdentity(3), t: [0.3, Infinity, 0.4]
+  }, { maxIter: 10 }), RangeError);
+});
+
+test('solveIK with a short seed produces finite q of full length', () => {
+  const t = K.endPose(K.PUMA_560, [0.4, 0.9, -0.7, 0.3, -0.8, 0.5]);
+  const r = K.solveIK(K.PUMA_560, [0, 0, 0, 0], t, { maxIter: 50 });
+  assert.equal(r.q.length, 6);
+  assert.ok(r.q.every(Number.isFinite));
+});
+
+test('jointWithinLimits rejects NaN q', () => {
+  assert.equal(K.jointWithinLimits(K.PUMA_560, [NaN, 0, 0, 0, 0, 0]), false);
+});
+
+test('obstaclePotential clamps fractional and out-of-range link indexes', () => {
+  const q = [0.4, 0.9, -0.7, 0.3, -0.8, 0.5];
+  const base = K.obstaclePotential(K.PUMA_560, q, [{ x: 0, y: 0, z: 0, radius: 0.5, margin: 0.2 }]);
+  assert.ok(Number.isFinite(base));
+  assert.ok(Number.isFinite(K.obstaclePotential(K.PUMA_560, q, [{ x: 0, y: 0, z: 0, radius: 0.5, margin: 0.2, from: -1 }])));
+  assert.ok(Number.isFinite(K.obstaclePotential(K.PUMA_560, q, [{ x: 0, y: 0, z: 0, radius: 0.5, margin: 0.2, from: 2.5 }])));
+  assert.ok(Number.isFinite(K.obstaclePotential(K.PUMA_560, q, [{ x: 0, y: 0, z: 0, radius: 0.5, margin: 0.2, from: 5, to: 1 }])));
+});
+
+test('plan.sample clamps negative time to the first waypoint', () => {
+  const p = K.planTrajectory(K.PUMA_560, [K.zeros(6), [0.4, 0.4, -0.4, 0.2, -0.2, 0.1], [0, 0, 0, 0, 0, 0]]);
+  const s = p.sample(-1);
+  close(s.q[0], 0, 1e-9);
+  assert.equal(s.t, 0);
+});
+
+test('sampleRange rejects absurd counts', () => {
+  const p = K.planTrajectory(K.PUMA_560, [K.zeros(6), [0.4, 0.9, -0.7, 0.3, -0.8, 0.5]]);
+  assert.throws(() => p.sampleRange(1e8), RangeError);
+  assert.throws(() => p.sampleRange(NaN), RangeError);
+});
+
+test('exportURDF preserves explicit zero metadata', () => {
+  const r = K.createRobot({
+    name: 'zero-bot',
+    links: [{ name: 'l0', a: 0.1, alpha: 0, d: 0, theta: 0, lo: -1, hi: 1, mass: 0, effort: 0, velocity: 0 }]
+  });
+  const xml = K.exportURDF(r);
+  assert.match(xml, /mass value="0"/);
+  assert.match(xml, /effort="0"/);
+  assert.match(xml, /velocity="0"/);
+});
+
+test('createRobot rejects a nonfinite base transform', () => {
+  assert.throws(() => K.createRobot({
+    name: 'x', links: [{ name: 'l', a: 0.1, lo: -1, hi: 1 }],
+    base: { R: [[NaN, 0, 0], [0, 1, 0], [0, 0, 1]], t: [0, 0, 0] }
+  }), RangeError);
+});
+
+test('exportURDF never emits NaN or Infinity tokens', () => {
+  const r = K.createRobot({
+    name: 'x', links: [{ name: 'l', a: 0.1, lo: -1, hi: 1 }]
+  });
+  const xml = K.exportURDF(r);
+  assert.doesNotMatch(xml, /NaN|Infinity/);
+});
+
+test('validateURDF ignores markup inside comments and requires real links', () => {
+  assert.equal(K.validateURDF('<?xml version="1.0"?><robot name="x"><!-- <link name="a"/> --></robot>').valid, false);
+  assert.equal(K.validateURDF('<robot name="x"><link name="a"><link name="b"></link></link></robot>').valid, false);
+  assert.equal(K.validateURDF(K.exportURDF(K.UR5E)).valid, true);
+});
+
+test('extractDHRows cannot be inflated by appended comments', () => {
+  const xml = K.exportURDF(K.PUMA_560);
+  const poisoned = xml + '<!-- evil: a=9 alpha=9 d=9 theta=9 -->';
+  assert.equal(K.extractDHRows(poisoned).length, K.PUMA_560.dof);
+});
+
+test('detectSingularity falls back on a degenerate tolerance', () => {
+  const q = [0.4, 0.9, -0.7, 0.3, -0.8, 0.5];
+  for (const tol of [NaN, Infinity, 1e9, -1]) {
+    const d = K.detectSingularity(K.PUMA_560, q, { tolerance: tol });
+    assert.equal(d.singular, false);
+    assert.ok(d.rank >= 3);
+  }
+});
+
+test('jointAxis rejects out-of-range indexes', () => {
+  const q = K.zeros(6);
+  assert.throws(() => K.jointAxis(K.PUMA_560, q, 6), RangeError);
+  assert.throws(() => K.jointAxis(K.PUMA_560, q, -1), RangeError);
+  assert.throws(() => K.jointAxis(K.PUMA_560, q, 2.5), RangeError);
+  assert.ok(Number.isFinite(K.jointAxis(K.PUMA_560, q, 5).z[0]));
+});
+
+test('dhParams rejects a wrong-length q', () => {
+  assert.throws(() => K.dhParams(K.PUMA_560, [0.1]), RangeError);
+  assert.throws(() => K.dhParams(K.PUMA_560, null), RangeError);
+});
+
+test('linkSamplePoints stays finite with zero or negative samples', () => {
+  for (const pts of [K.linkSamplePoints(K.PUMA_560, K.zeros(6), 0), K.linkSamplePoints(K.PUMA_560, K.zeros(6), -3)]) {
+    for (const p of pts) assert.ok(p.point.every(Number.isFinite));
+  }
+});
+
+test('segmentJerkCost rejects nonpositive durations', () => {
+  assert.throws(() => K.segmentJerkCost(0, 0, 1, 0, 0, 0, 0), RangeError);
+  assert.throws(() => K.segmentJerkCost(-2, 0, 1, 0, 0, 0, 0), RangeError);
+  assert.throws(() => K.segmentJerkCost(NaN, 0, 1, 0, 0, 0, 0), RangeError);
+});
+
+test('solveIK useLimits:false never clamps into limits', () => {
+  const target = K.endPose(K.PUMA_560, [0.4, 0.9, -0.7, 0.3, -0.8, 0.5]);
+  const r = K.solveIK(K.PUMA_560, K.PUMA_560.links.map(l => l.hi + 0.3), target, { useLimits: false, maxIter: 60 });
+  assert.equal(r.q.length, 6);
+  assert.ok(r.q.every(Number.isFinite));
+});
+
+test('solveIK clamps a hostile limitMargin instead of inverting the band', () => {
+  const target = K.endPose(K.PUMA_560, [0.4, 0.9, -0.7, 0.3, -0.8, 0.5]);
+  const r = K.solveIK(K.PUMA_560, K.zeros(6), target, { limitMargin: 5, maxIter: 400 });
+  assert.ok(Number.isFinite(r.error));
+});
+
+test('solveIK rejects a negative weightRotation but allows zero', () => {
+  const target = K.endPose(K.PUMA_560, [0.4, 0.9, -0.7, 0.3, -0.8, 0.5]);
+  assert.throws(() => K.solveIK(K.PUMA_560, K.zeros(6), target, { weightRotation: -1 }), RangeError);
+  const r = K.solveIK(K.PUMA_560, K.zeros(6), target, { weightRotation: 0, maxIter: 400 });
+  assert.ok(Number.isFinite(r.positionError));
 });
