@@ -99,8 +99,8 @@ code, kbd, .readout, .stat strong, output, .badge, textarea { font-family: ui-mo
 .layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; padding: 16px 22px 24px; align-items: start; }
 @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
-.controls-panel { padding: 16px; position: sticky; top: 12px; }
-@media (max-width: 980px) { .controls-panel { position: static; } }
+.controls-panel { padding: 16px; position: sticky; top: 12px; max-height: calc(100vh - 2rem); overflow-y: auto; }
+@media (max-width: 980px) { .controls-panel { position: static; max-height: none; overflow-y: visible; } }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
 .panel-tag { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 .control-block { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
