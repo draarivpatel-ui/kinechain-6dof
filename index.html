@@ -41,7 +41,7 @@
     <p class="small">Keyboard: every control is reachable by Tab, sliders respond to arrow keys, and buttons activate on Space or Enter. Focus rings are always visible.</p>
   </section>
 
-  <main id="workbench" class="layout">
+  <main id="workbench" class="layout" tabindex="-1">
     <aside class="panel controls-panel" aria-label="Robot controls">
       <div class="panel-head">
         <h2>Rig</h2>
@@ -161,6 +161,9 @@
           <div class="control-row">
             <label for="seqZ">z (m)</label><input id="seqZ" type="number" step="0.01" value="0.30">
           </div>
+          <div class="control-row">
+            <label for="seqDwell">hold (s)</label><input id="seqDwell" type="number" min="0" max="60" step="0.1" value="0">
+          </div>
         </div>
         <div class="button-grid">
           <button id="seqAddBtn" class="btn" type="button">Add waypoint</button>
@@ -178,6 +181,7 @@
     </aside>
 
     <section class="stage" aria-label="Analysis workspace">
+      <h2 class="sr-only">Analysis workspace</h2>
       <div class="panel status-panel">
         <div class="stat-grid">
           <div class="stat"><span class="stat-label">End position</span><strong id="statPos">-</strong></div>
@@ -189,7 +193,7 @@
           <div class="stat"><span class="stat-label">Singularity risk</span><strong id="statRisk">-</strong></div>
         </div>
         <div class="risk-row" aria-label="Singularity risk meter">
-          <div class="risk-meter" role="img" aria-label="Risk score from zero to one"><div id="riskBar" class="risk-bar"></div></div>
+          <div id="riskMeter" class="risk-meter" role="meter" aria-label="Singularity risk score" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><div id="riskBar" class="risk-bar"></div></div>
           <span id="riskPill" class="risk-pill safe">safe</span>
         </div>
         <p id="statusLine" class="status-line" role="status"></p>

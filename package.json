@@ -6,7 +6,7 @@
   "type": "commonjs",
   "main": "src/robotics.js",
   "scripts": {
-    "test": "node --test --test-reporter=spec test/robotics.test.mjs test/invariants.test.mjs test/sequencer.test.mjs ui.test.cjs test/ui-seq.test.cjs"
+    "test": "node --test --test-reporter=spec test/robotics.test.mjs test/invariants.test.mjs test/sequencer.test.mjs test/hardening.test.mjs ui.test.cjs test/ui-seq.test.cjs test/ui-hardening.test.cjs"
   },
   "keywords": ["robotics", "kinematics", "denavit-hartenberg", "inverse-kinematics", "jacobian", "urdf", "trajectory"],
   "license": "MIT",

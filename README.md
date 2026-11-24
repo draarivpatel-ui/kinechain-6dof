@@ -81,14 +81,14 @@ Run the test suite (Node 22+, no packages to install):
 npm test
 ```
 
-Verified: 338 tests, 338 passing, 0 failures. The suite covers transform
+Verified: 366 tests, 366 passing, 0 failures. The suite covers transform
 and quaternion identities, forward kinematics against hand-checked poses,
 Jacobian analytical versus central finite-difference parity below 1e-5,
 manipulability properties, singularity detection at elbow and wrist
 alignments, IK convergence and joint limits, cubic spline and trapezoidal
 boundary conditions, waypoint IK chaining, dwell holds, floor-clearance
 and collision flags, deterministic export checksums, URL hash recovery,
-URDF round-trip validation, and page-level UI invariants.
+URDF round-trip validation, malformed-input hardening, deterministic export metadata, and page-level accessibility invariants.
 
 ## License
 

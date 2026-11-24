@@ -566,7 +566,7 @@
       for (const key of ['velocity', 'effort', 'mass', 'radius', 'length']) {
         if (!Number.isFinite(l[key])) throw new RangeError('link ' + i + ' has nonfinite ' + key);
       }
-      if (l.radius < 0 || l.length < 0 || l.mass < 0) {
+      if (l.radius < 0 || l.length < 0 || l.mass < 0 || l.velocity < 0 || l.effort < 0) {
         throw new RangeError('link ' + i + ' has a negative physical dimension');
       }
     }
@@ -744,7 +744,10 @@
   function manipulabilityProfile(robot, samples) {
     const n = robot.dof;
     const out = [];
-    const count = samples || 48;
+    const count = samples === undefined ? 48 : samples;
+    if (!Number.isInteger(count) || count < 1 || count > 512) {
+      throw new RangeError('manipulabilityProfile samples must be an integer in [1, 512]');
+    }
     for (let i = 0; i < count; i++) {
       const q = new Array(n);
       for (let j = 0; j < n; j++) {
@@ -872,9 +875,10 @@
     const n = robot.dof;
     let v = 0;
     for (const ob of obstacles) {
-      const p = [ob.x || 0, ob.y || 0, ob.z || 0];
-      const r = ob.radius === undefined ? 0.1 : ob.radius;
-      const margin = ob.margin === undefined ? 0.05 : ob.margin;
+      if (!ob || typeof ob !== 'object') throw new RangeError('obstacle is malformed');
+      const p = collisionPoint(ob, 'obstacle center');
+      const r = collisionRadius(ob.radius, 0.1, 'obstacle radius');
+      const margin = collisionRadius(ob.margin, 0.05, 'obstacle margin');
       const rawFrom = Number(ob.from === undefined ? 0 : ob.from);
       const rawTo = Number(ob.to === undefined ? n : ob.to);
       const sampleFrom = clamp(Math.round(Number.isFinite(rawFrom) ? rawFrom : 0), 0, n);
@@ -958,13 +962,24 @@
     const useLimits = o.useLimits !== false;
     const weightRot = o.weightRotation === undefined ? 1 : o.weightRotation;
     if (!Number.isFinite(weightRot) || weightRot < 0) throw new RangeError('weightRotation must be nonnegative');
+    if (!Number.isInteger(maxIter) || maxIter < 1 || maxIter > 10000) throw new RangeError('maxIter must be an integer in [1, 10000]');
+    if (!Number.isFinite(posTol) || posTol < 0) throw new RangeError('posTol must be nonnegative and finite');
+    if (!Number.isFinite(rotTol) || rotTol < 0) throw new RangeError('rotTol must be nonnegative and finite');
+    if (!Number.isFinite(damping) || damping <= 0) throw new RangeError('damping must be positive and finite');
+    if (!Number.isFinite(obsWeight) || obsWeight < 0) throw new RangeError('obstacleWeight must be nonnegative and finite');
     const stepScale = o.stepScale === undefined ? 1 : o.stepScale;
+    if (!Number.isFinite(stepScale) || stepScale <= 0 || stepScale > 1) throw new RangeError('stepScale must sit inside (0, 1]');
     const rawMargin = o.limitMargin === undefined ? 0.01 : o.limitMargin;
     const limitMargin = Number.isFinite(rawMargin) ? clamp(rawMargin, 0, 0.45) : 0.01;
     const maxStep = o.maxStep === undefined ? 0.5 : o.maxStep;
-    if (target && target.t && target.R) {
-      for (const v of target.t) if (!Number.isFinite(v)) throw new RangeError('IK target translation is nonfinite');
-      for (const row of target.R) for (const v of row) if (!Number.isFinite(v)) throw new RangeError('IK target rotation is nonfinite');
+    if (!Number.isFinite(maxStep) || maxStep <= 0) throw new RangeError('maxStep must be positive and finite');
+    if (!target || !Array.isArray(target.t) || target.t.length !== 3 || !Array.isArray(target.R) || target.R.length !== 3) {
+      throw new RangeError('IK target needs a 3-vector translation and a 3x3 rotation');
+    }
+    for (const v of target.t) if (!Number.isFinite(v)) throw new RangeError('IK target translation is nonfinite');
+    for (const row of target.R) {
+      if (!Array.isArray(row) || row.length !== 3) throw new RangeError('IK target rotation must be 3x3');
+      for (const v of row) if (!Number.isFinite(v)) throw new RangeError('IK target rotation is nonfinite');
     }
     // Convergence is tested on position (metres) and rotation (radians)
     // separately, so relaxing one side, for example a position only solve
@@ -1201,7 +1216,8 @@
     const out = [];
     for (let i = 0; i < robot.dof; i++) {
       const l = robot.links[i];
-      if (q[i] < l.lo) out.push({ index: i, name: l.name, value: q[i], limit: l.lo, side: 'below' });
+      if (!Number.isFinite(q[i])) out.push({ index: i, name: l.name, value: q[i], limit: null, side: 'nonfinite' });
+      else if (q[i] < l.lo) out.push({ index: i, name: l.name, value: q[i], limit: l.lo, side: 'below' });
       else if (q[i] > l.hi) out.push({ index: i, name: l.name, value: q[i], limit: l.hi, side: 'above' });
     }
     return out;
@@ -1311,8 +1327,12 @@
     });
     if (pts.length < 2) throw new RangeError('a trajectory needs at least two waypoints');
     const segDur = o.durations || null;
-    const vLimits = robot.links.map(l => (o.velocityScale === undefined ? 1 : o.velocityScale) * l.velocity);
-    const aLimits = robot.links.map(l => (o.accelScale === undefined ? 1 : o.accelScale) * l.velocity);
+    const vScale = o.velocityScale === undefined ? 1 : o.velocityScale;
+    const aScale = o.accelScale === undefined ? 1 : o.accelScale;
+    if (!Number.isFinite(vScale) || vScale <= 0) throw new RangeError('velocityScale must be positive and finite');
+    if (!Number.isFinite(aScale) || aScale <= 0) throw new RangeError('accelScale must be positive and finite');
+    const vLimits = robot.links.map(l => vScale * l.velocity);
+    const aLimits = robot.links.map(l => aScale * l.velocity);
     const jLim = robot.links.map(l => l.velocity * 4);
 
     const segments = [];
@@ -1362,7 +1382,7 @@
       totalTime: time,
       sample: sampleAt,
       sampleRange: function (count) {
-        if (count !== undefined && (!Number.isFinite(count) || count < 2 || count > 100000)) {
+        if (count !== undefined && (!Number.isInteger(count) || count < 2 || count > 100000)) {
           throw new RangeError('sampleRange count must be an integer in [2, 100000]');
         }
         const out = [];
@@ -1429,11 +1449,11 @@
         }
         if (Math.abs(s.dq[j]) > maxVelocity) maxVelocity = Math.abs(s.dq[j]);
         if (Math.abs(s.ddq[j]) > maxAccel) maxAccel = Math.abs(s.ddq[j]);
-        if (vLim && s.dq[j] > vLim[j] * 1.05 + 1e-9) {
+        if (vLim && Math.abs(s.dq[j]) > vLim[j] * 1.05 + 1e-9) {
           inVelocityLimits = false;
           if (violations.length < 32) violations.push({ t: t, joint: j, kind: 'velocity', value: s.dq[j], limit: vLim[j] });
         }
-        if (aLim && s.ddq[j] > aLim[j] * 1.05 + 1e-9) {
+        if (aLim && Math.abs(s.ddq[j]) > aLim[j] * 1.05 + 1e-9) {
           inAccelLimits = false;
           if (violations.length < 32) violations.push({ t: t, joint: j, kind: 'acceleration', value: s.ddq[j], limit: aLim[j] });
         }
@@ -1476,15 +1496,34 @@
   // Straight-line capsule samples between consecutive link origins,
   // tested against a list of spheres in world coordinates.
   // ============================================================
+  function collisionCoordinate(v, label) {
+    if (v === undefined || v === null) return 0;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new RangeError(label + ' must be finite');
+    return n;
+  }
+
+  function collisionRadius(v, fallback, label) {
+    const n = v === undefined ? fallback : Number(v);
+    if (!Number.isFinite(n)) throw new RangeError(label + ' must be finite');
+    if (n < 0) throw new RangeError(label + ' must be nonnegative');
+    return n;
+  }
+
+  function collisionPoint(p, label) {
+    return Array.isArray(p)
+      ? [collisionCoordinate(p[0], label + ' x'), collisionCoordinate(p[1], label + ' y'), collisionCoordinate(p[2], label + ' z')]
+      : [collisionCoordinate(p && p.x, label + ' x'), collisionCoordinate(p && p.y, label + ' y'), collisionCoordinate(p && p.z, label + ' z')];
+  }
+
   function sphereDistance(p, c) {
-    const pc = Array.isArray(p) ? p : [p.x || 0, p.y || 0, p.z || 0];
-    return norm(vecSub(pc, [c.x || 0, c.y || 0, c.z || 0]));
+    return norm(vecSub(collisionPoint(p, 'point'), collisionPoint(c, 'sphere center')));
   }
 
   function spheresCollide(a, b) {
     const d = sphereDistance(a, b);
-    const ra = a.radius === undefined ? 0.05 : a.radius;
-    const rb = b.radius === undefined ? 0.05 : b.radius;
+    const ra = collisionRadius(a && a.radius, 0.05, 'first sphere radius');
+    const rb = collisionRadius(b && b.radius, 0.05, 'second sphere radius');
     return d < ra + rb;
   }
 
@@ -1501,7 +1540,7 @@
   function linkSamplePoints(robot, q, samplesPerLink) {
     const fk = forwardKinematics(robot, q).frames;
     const pts = [];
-    const n = samplesPerLink === undefined ? 8 : Math.max(1, Math.round(samplesPerLink));
+    const n = samplesPerLink === undefined || !Number.isFinite(samplesPerLink) ? 8 : clamp(Math.round(samplesPerLink), 1, 64);
     for (let i = 0; i < fk.length - 1; i++) {
       const a = fk[i].t, b = fk[i + 1].t;
       const start = i === 0 ? 0 : 1;
@@ -1527,8 +1566,10 @@
     for (let i = 0; i < list.length; i++) {
       const ob = list[i];
       if (ob.enabled === false) continue;
-      const c = [ob.x || 0, ob.y || 0, ob.z || 0];
-      const r = (ob.radius === undefined ? 0.1 : ob.radius) + clearance;
+      if (!ob || typeof ob !== 'object') throw new RangeError('obstacle ' + i + ' is malformed');
+      const c = collisionPoint(ob, 'obstacle ' + i + ' center');
+      if (!Number.isFinite(clearance) || clearance < 0) throw new RangeError('collision clearance must be nonnegative and finite');
+      const r = collisionRadius(ob.radius, 0.1, 'obstacle ' + i + ' radius') + clearance;
       for (let j = 0; j < frames.length - 1; j++) {
         // The optional links filter names LINK segment indices, so an
         // obstacle report can be restricted to a subset of the arm.
@@ -1647,6 +1688,9 @@
     L.push(two + '</joint>');
     L.push('');
 
+    for (const l of r.links) {
+      if (String(l.name).includes('--')) throw new RangeError('URDF link names cannot contain a double hyphen');
+    }
     let prevTxRx = poseIdentity();
     for (let i = 0; i < r.dof; i++) {
       const l = r.links[i];
@@ -1654,7 +1698,7 @@
       const parent = i === 0 ? 'base_link' : (o.linkNames ? (o.linkNames[i - 1] || r.links[i - 1].name) : r.links[i - 1].name);
       const jointName = o.jointNames ? (o.jointNames[i] || 'joint_' + (i + 1)) : ('joint_' + (i + 1));
       const isPrismatic = l.type === 'prismatic';
-      const isContinuous = !isPrismatic && (Math.abs(l.lo + 2 * Math.PI) < 1e-6 || Math.abs(l.hi - 2 * Math.PI) < 1e-6 || (l.lo <= -2 * Math.PI && l.hi >= 2 * Math.PI));
+      const isContinuous = !isPrismatic && l.lo <= -2 * Math.PI && l.hi >= 2 * Math.PI;
       const jointPose = dhJointOrigin(prevTxRx, l);
       const originRpy = matToEuler(jointPose.R);
       const origin = { xyz: jointPose.t, rpy: [originRpy.roll, originRpy.pitch, originRpy.yaw] };
@@ -1674,7 +1718,7 @@
       L.push(four + '</collision>');
       L.push(four + '<inertial>');
       L.push(six + '<mass value="' + num(l.mass === undefined ? 2 : l.mass) + '"/>');
-      L.push(six + '<inertia ixx="' + num(0.001) + '" ixy="0" ixz="0" iyy="' + num(0.001) + '" iyz="0" zzz="' + num(0.001) + '"/>');
+      L.push(six + '<inertia ixx="' + num(0.001) + '" ixy="0" ixz="0" iyy="' + num(0.001) + '" iyz="0" izz="' + num(0.001) + '"/>');
       L.push(four + '</inertial>');
       L.push(two + '</link>');
       L.push('');
@@ -1765,7 +1809,7 @@
   function extractDHRows(xml) {
     const rows = [];
     const numPat = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
-    const re = new RegExp('<!--\\s*([^<:]+?):\\s*a=(' + numPat + ')\\s+alpha=(' + numPat + ')\\s+d=(' + numPat + ')\\s+theta=(' + numPat + ')\\s*-->', 'g');
+    const re = new RegExp('<!--\\s*([^<]+?):\\s*a=(' + numPat + ')\\s+alpha=(' + numPat + ')\\s+d=(' + numPat + ')\\s+theta=(' + numPat + ')\\s*-->', 'g');
     // A row only counts when its name is a real link name in the same
     // document, so attacker-appended comments cannot inject phantom rows.
     const linkNames = new Set();
@@ -1967,8 +2011,10 @@
       if (h[i] <= 1e-12) throw new RangeError('spline knot times must strictly increase');
     }
     const slope = i => (ys[i + 1] - ys[i]) / h[i];
-    const v0 = Number.isFinite(o.v0) ? o.v0 : 0;
-    const vn = Number.isFinite(o.vn) ? o.vn : 0;
+    if (o.v0 !== undefined && !Number.isFinite(o.v0)) throw new RangeError('spline initial velocity is nonfinite');
+    if (o.vn !== undefined && !Number.isFinite(o.vn)) throw new RangeError('spline final velocity is nonfinite');
+    const v0 = o.v0 === undefined ? 0 : o.v0;
+    const vn = o.vn === undefined ? 0 : o.vn;
     // Second-derivative unknowns m_i; the first and last rows encode the
     // clamped boundary conditions, the interior rows enforce C2.
     const a = new Array(N).fill(0);
@@ -2068,6 +2114,8 @@
     if (pts.length < 2) throw new RangeError('a trajectory needs at least two waypoints');
     const vScale = o.velocityScale === undefined ? 1 : o.velocityScale;
     const aScale = o.accelScale === undefined ? 1 : o.accelScale;
+    if (!Number.isFinite(vScale) || vScale <= 0) throw new RangeError('velocityScale must be positive and finite');
+    if (!Number.isFinite(aScale) || aScale <= 0) throw new RangeError('accelScale must be positive and finite');
     const vLimits = robot.links.map(l => vScale * l.velocity);
     const aLimits = robot.links.map(l => aScale * 2.5 * l.velocity);
     const jLim = robot.links.map(l => l.velocity * 4);
@@ -2141,7 +2189,7 @@
       totalTime: time,
       sample: sampleAt,
       sampleRange: function (count) {
-        if (count !== undefined && (!Number.isFinite(count) || count < 2 || count > 100000)) {
+        if (count !== undefined && (!Number.isInteger(count) || count < 2 || count > 100000)) {
           throw new RangeError('sampleRange count must be an integer in [2, 100000]');
         }
         const out = [];
@@ -2167,6 +2215,7 @@
   // ============================================================
   function floorClearance(robot, q, floorZ) {
     const fz = floorZ === undefined ? 0 : floorZ;
+    if (!Number.isFinite(fz)) throw new RangeError('floorZ must be finite');
     const pts = linkSamplePoints(robot, q, 12);
     let minZ = Infinity;
     let worst = null;
@@ -2212,8 +2261,8 @@
     const out = [];
     let prev = o.seedStart || zeros(robot.dof);
     for (let i = 0; i < points.length; i++) {
-      const wp = points[i];
-      const tp = Array.isArray(wp) ? wp : wp.t;
+      const wp = normalizeSeqWaypoint(points[i], i);
+      const tp = wp.t;
       const target = { R: matIdentity(3), t: tp };
       const seedList = [prev.slice()].concat(ikSeeds(robot, seeds));
       const res = solveIKMultiStart(robot, target, {
@@ -2230,8 +2279,8 @@
       out.push({
         index: i,
         t: tp.slice(),
-        label: wp && wp.label ? wp.label : 'W' + (i + 1),
-        dwell: wp && Number.isFinite(wp.dwell) ? wp.dwell : 0,
+        label: wp.label,
+        dwell: wp.dwell,
         q: q,
         converged: res.converged,
         positionError: res.positionError,
@@ -2657,7 +2706,11 @@
     if (s.waypoints && s.waypoints.length) {
       parts.push('w=' + s.waypoints.map(wp => {
         const t = Array.isArray(wp) ? wp : (wp && wp.t) || [0, 0, 0];
-        return t.map(v => (Number.isFinite(v) ? round(v, 4) : 0)).join(',');
+        const vals = t.slice(0, 3).map(v => (Number.isFinite(v) ? round(v, 4) : 0));
+        const rawDwell = Array.isArray(wp) ? wp[3] : wp && wp.dwell;
+        const dwell = Number.isFinite(rawDwell) ? clamp(rawDwell, 0, 60) : 0;
+        if (dwell > 0) vals.push(round(dwell, 3));
+        return vals.join(',');
       }).join(';'));
     }
     if (s.mode) parts.push('m=' + encodeURIComponent(s.mode));
@@ -2666,14 +2719,20 @@
 
   function parseHashState(text) {
     const raw = String(text || '').replace(/^#/, '');
-    const out = { robot: null, q: null, waypoints: null, mode: null, errors: [] };
+    const out = { robot: null, q: null, waypoints: null, dwells: null, mode: null, errors: [] };
     if (!raw) return out;
     const robotNames = Object.keys(ROBOTS);
     for (const part of raw.split('&')) {
       const eq = part.indexOf('=');
       if (eq < 0) { out.errors.push('skipped "' + part + '"'); continue; }
       const key = part.slice(0, eq);
-      const val = decodeURIComponent(part.slice(eq + 1));
+      let val = '';
+      try {
+        val = decodeURIComponent(part.slice(eq + 1));
+      } catch (e) {
+        out.errors.push('malformed percent escape in "' + key + '"');
+        continue;
+      }
       if (key === 'r') {
         if (robotNames.includes(val)) out.robot = val;
         else out.errors.push('unknown robot "' + val + '"');
@@ -2683,14 +2742,17 @@
         else out.errors.push('bad q vector');
       } else if (key === 'w') {
         const wps = [];
+        const dwells = [];
         let bad = false;
         for (const group of val.split(';')) {
           const t = group.split(',').map(Number);
-          if (t.length === 3 && t.every(Number.isFinite)) wps.push(t);
-          else bad = true;
+          if ((t.length === 3 || t.length === 4) && t.every(Number.isFinite)) {
+            wps.push(t.slice(0, 3));
+            dwells.push(t.length === 4 ? clamp(t[3], 0, 60) : 0);
+          } else bad = true;
         }
-        if (wps.length > 32) { wps.length = 32; out.errors.push('waypoint list truncated to 32'); }
-        if (wps.length) out.waypoints = wps;
+        if (wps.length > 32) { wps.length = 32; dwells.length = 32; out.errors.push('waypoint list truncated to 32'); }
+        if (wps.length) { out.waypoints = wps; out.dwells = dwells; }
         if (bad) out.errors.push('dropped malformed waypoints');
       } else if (key === 'm') {
         if (['cubic', 'trapezoid', 'trapezoidal', 'quintic'].includes(val)) out.mode = val;

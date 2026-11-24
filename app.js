@@ -17,8 +17,8 @@
     playBtn: $('playBtn'), scrubSlider: $('scrubSlider'), scrubOut: $('scrubOut'),
     statPos: $('statPos'), statRpy: $('statRpy'), statManip: $('statManip'), statSigma: $('statSigma'),
     statSing: $('statSing'), statColl: $('statColl'), statRisk: $('statRisk'),
-    riskBar: $('riskBar'), riskPill: $('riskPill'), statusLine: $('statusLine'),
-    seqMode: $('seqMode'), seqX: $('seqX'), seqY: $('seqY'), seqZ: $('seqZ'),
+    riskBar: $('riskBar'), riskMeter: $('riskMeter'), riskPill: $('riskPill'), statusLine: $('statusLine'),
+    seqMode: $('seqMode'), seqX: $('seqX'), seqY: $('seqY'), seqZ: $('seqZ'), seqDwell: $('seqDwell'),
     seqAddBtn: $('seqAddBtn'), seqAddCurBtn: $('seqAddCurBtn'), seqClearBtn: $('seqClearBtn'),
     seqPlanBtn: $('seqPlanBtn'), seqList: $('seqList'), seqStatus: $('seqStatus'),
     riskStrip: $('riskStrip'), riskStripNote: $('riskStripNote'),
@@ -309,6 +309,7 @@
     state.risk = risk;
     els.statRisk.textContent = risk.level + ' ' + fmt(risk.score, 2);
     els.riskBar.style.width = (Math.max(0, Math.min(1, risk.score)) * 100).toFixed(1) + '%';
+    els.riskMeter.setAttribute('aria-valuenow', fmt(Math.max(0, Math.min(1, risk.score)), 3));
     els.riskBar.className = 'risk-bar' + (risk.level === 'safe' ? '' : ' ' + risk.level);
     els.riskPill.textContent = risk.level;
     els.riskPill.className = 'risk-pill ' + risk.level;
@@ -340,7 +341,8 @@
     const rows = ['vx', 'vy', 'vz', 'wx', 'wy', 'wz'];
     for (let rr = 0; rr < 6; rr++) {
       const tr = document.createElement('tr');
-      const td0 = document.createElement('td');
+      const td0 = document.createElement('th');
+      td0.setAttribute('scope', 'row');
       td0.textContent = rows[rr];
       tr.appendChild(td0);
       for (let c = 0; c < state.robot.dof; c++) {
@@ -475,7 +477,7 @@
       actions.appendChild(mkBtn('Up', 'Move ' + wp.label + ' up', () => moveWaypoint(i, -1), i === 0));
       actions.appendChild(mkBtn('Dn', 'Move ' + wp.label + ' down', () => moveWaypoint(i, 1), i === state.seq.wps.length - 1));
       actions.appendChild(mkBtn('Edit', 'Edit ' + wp.label, () => {
-        els.seqX.value = fmt(wp.t[0], 3); els.seqY.value = fmt(wp.t[1], 3); els.seqZ.value = fmt(wp.t[2], 3);
+        els.seqX.value = fmt(wp.t[0], 3); els.seqY.value = fmt(wp.t[1], 3); els.seqZ.value = fmt(wp.t[2], 3); els.seqDwell.value = fmt(wp.dwell || 0, 1);
         removeWaypoint(i);
       }));
       actions.appendChild(mkBtn('Del', 'Delete ' + wp.label, () => removeWaypoint(i)));
@@ -504,7 +506,7 @@
 
   function addWaypoint(t, dwell) {
     if (state.seq.wps.length >= 12) { fail('At most 12 waypoints.'); return; }
-    state.seq.wps.push({ t: t.slice(), label: 'W' + (state.seq.wps.length + 1), dwell: Number.isFinite(dwell) && dwell > 0 ? dwell : 0 });
+    state.seq.wps.push({ t: t.slice(), label: 'W' + (state.seq.wps.length + 1), dwell: Number.isFinite(dwell) ? Math.max(0, Math.min(60, dwell)) : 0 });
     state.seq.dirty = true;
     renderSeqList();
     updateHash();
@@ -686,7 +688,7 @@
   // ---------- waypoint sequencer ----------
   const seqNum = el => { const v = Number(el.value); return Number.isFinite(v) ? v : 0; };
   els.seqAddBtn.addEventListener('click', () => {
-    addWaypoint([seqNum(els.seqX), seqNum(els.seqY), seqNum(els.seqZ)]);
+    addWaypoint([seqNum(els.seqX), seqNum(els.seqY), seqNum(els.seqZ)], seqNum(els.seqDwell));
   });
   els.seqAddCurBtn.addEventListener('click', () => {
     addWaypoint(K.endPose(state.robot, state.q).t);
@@ -754,11 +756,11 @@
           setRobot(hashState.robot);
         }
         if (hashState.q && hashState.q.length === state.robot.dof) {
-          state.q = hashState.q.slice();
+          state.q = hashState.q.map((v, i) => Math.max(state.robot.links[i].lo, Math.min(state.robot.links[i].hi, v)));
           syncSliders();
         }
         if (hashState.waypoints && hashState.waypoints.length) {
-          state.seq.wps = hashState.waypoints.map((t, i) => ({ t: t.slice(0, 3), label: 'W' + (i + 1), dwell: 0 }));
+          state.seq.wps = hashState.waypoints.map((t, i) => ({ t: t.slice(0, 3), label: 'W' + (i + 1), dwell: hashState.dwells ? hashState.dwells[i] || 0 : 0 }));
           renderSeqList();
         }
         if (hashState.mode && els.seqMode) els.seqMode.value = hashState.mode;
