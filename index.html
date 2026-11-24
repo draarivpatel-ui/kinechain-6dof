@@ -16,7 +16,16 @@
   <a class="skip-link" href="#workbench">Skip to workbench</a>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">&#9878;</span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" focusable="false" aria-hidden="true">
+          <path d="M4 20h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M6.5 18 10 11l6 2 3.5-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="6.5" cy="18" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <circle cx="10" cy="11" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <circle cx="16" cy="13" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M18.5 7.5 21 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </span>
       <div>
         <h1>KineChain 6DOF</h1>
       </div>
@@ -45,7 +54,6 @@
     <aside class="panel controls-panel" aria-label="Robot controls">
       <div class="panel-head">
         <h2>Rig</h2>
-        <span class="panel-tag">local engine</span>
       </div>
 
       <div class="control-block">
@@ -137,7 +145,7 @@
           <output id="scrubOut">0.00 s</output>
           <input id="scrubSlider" type="range" min="0" max="1" step="0.005" value="0">
         </div>
-        <canvas id="riskStrip" class="risk-strip" width="280" height="16" tabindex="0" role="img" aria-label="Singularity risk along the planned path, coloured by level from safe green to critical red"></canvas>
+        <canvas id="riskStrip" class="risk-strip" width="280" height="24" tabindex="0" role="img" aria-label="Singularity risk along the planned path, coloured by level from safe green to critical red"></canvas>
         <p id="riskStripNote" class="hint">Plan a path to profile singularity risk along it.</p>
       </div>
 
@@ -203,7 +211,6 @@
         <div class="panel plot-panel">
           <div class="plot-head">
             <h3>Side view (X,Z)</h3>
-            <span class="plot-note">forward kinematics chain</span>
           </div>
           <canvas id="sideCanvas" width="560" height="420" tabindex="0" role="img" aria-label="Side projection of the robot arm with joint positions and obstacles"></canvas>
           <p class="readout" id="sideReadout"></p>
@@ -211,7 +218,6 @@
         <div class="panel plot-panel">
           <div class="plot-head">
             <h3>Top view (X,Y)</h3>
-            <span class="plot-note">base frame projection</span>
           </div>
           <canvas id="topCanvas" width="560" height="420" tabindex="0" role="img" aria-label="Top projection of the robot arm with joint positions and obstacles"></canvas>
           <p class="readout" id="topReadout"></p>
@@ -221,7 +227,6 @@
       <div class="panel plot-panel">
         <div class="plot-head">
           <h3>Geometric Jacobian</h3>
-          <span class="plot-note">rows vx vy vz, wx wy wz at current q</span>
         </div>
         <div class="table-scroll">
           <table id="jacobianTable">
