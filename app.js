@@ -148,10 +148,25 @@
   }
 
   // ---------- canvas drawing ----------
+  function fitCanvas(canvas) {
+    const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+    const attrW = Number(canvas.getAttribute('width')) || canvas.width || 560;
+    const attrH = Number(canvas.getAttribute('height')) || canvas.height || 420;
+    const cssW = rect && rect.width ? rect.width : attrW;
+    const cssH = rect && rect.height ? rect.height : attrH;
+    const scale = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    const pw = Math.max(1, Math.round(cssW * scale));
+    const ph = Math.max(1, Math.round(cssH * scale));
+    if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
+    const ctx = canvas.getContext('2d');
+    if (ctx && ctx.setTransform) ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    return { ctx, w: cssW, h: cssH };
+  }
   function drawView(canvas, axes) {
     // axes: [indexForX, indexForY] into the 3D world point
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height;
+    const view = fitCanvas(canvas);
+    const ctx = view.ctx;
+    const W = view.w, H = view.h;
     const V = themeVars();
     ctx.clearRect(0, 0, W, H);
     const reach = reachOf(state.robot);
@@ -323,6 +338,7 @@
       'Highest joint utilisation: j' + (worst + 1) + ' at ' + fmt(util[worst] * 100, 0) + '%.';
     els.sideReadout.textContent = 'frames: ' + fk.frames.map(f => '(' + fmt(f.t[0], 2) + ',' + fmt(f.t[1], 2) + ',' + fmt(f.t[2], 2) + ')').join('  ');
     els.topReadout.textContent = 'reach ' + fmt(reachOf(r), 2) + ' m, dof ' + r.dof;
+    drawRiskStrip(state.playT);
     renderJacobian();
   }
 
@@ -396,12 +412,14 @@
   function solveIk() {
     try {
       const target = readTarget();
-      const result = K.solveIKMultiStart(state.robot, target, {
-        seeds: 12,
+      const solverOptions = {
         maxIter: 400,
         obstacles: obstacleList(),
-        obstacleWeight: 2
-      });
+        obstacleWeight: 2,
+        limitMargin: 0
+      };
+      const direct = K.solveIK(state.robot, state.q, target, solverOptions);
+      const result = direct.converged ? direct : K.solveIKMultiStart(state.robot, target, Object.assign({ seeds: 12 }, solverOptions));
       state.lastIk = { target: target, result: result };
       if (result.converged) state.q = result.q.slice();
       render();
@@ -515,8 +533,9 @@
   // Profile the planned path and paint one colour bar per sample on the
   // risk strip, so singularity risk reads like a timeline heatmap.
   function drawRiskStrip(markerT) {
-    const ctx = els.riskStrip.getContext('2d');
-    const W = els.riskStrip.width, H = els.riskStrip.height;
+    const view = fitCanvas(els.riskStrip);
+    const ctx = view.ctx;
+    const W = view.w, H = view.h;
     if (!ctx) return;
     const V = themeVars();
     ctx.fillStyle = V.grid;
@@ -626,8 +645,8 @@
   els.targetFromPoseBtn.addEventListener('click', () => {
     const ee = K.endPose(state.robot, state.q);
     const rpy = K.matToEuler(ee.R);
-    els.tgtX.value = fmt(ee.t[0], 3); els.tgtY.value = fmt(ee.t[1], 3); els.tgtZ.value = fmt(ee.t[2], 3);
-    els.tgtRoll.value = fmt(rpy.roll, 3); els.tgtPitch.value = fmt(rpy.pitch, 3); els.tgtYaw.value = fmt(rpy.yaw, 3);
+    els.tgtX.value = fmt(ee.t[0], 6); els.tgtY.value = fmt(ee.t[1], 6); els.tgtZ.value = fmt(ee.t[2], 6);
+    els.tgtRoll.value = fmt(rpy.roll, 6); els.tgtPitch.value = fmt(rpy.pitch, 6); els.tgtYaw.value = fmt(rpy.yaw, 6);
     render();
   });
   els.obsAddBtn.addEventListener('click', () => {
@@ -736,6 +755,12 @@
     els.helpPanel.hidden = !open;
     els.helpToggle.setAttribute('aria-expanded', String(open));
   });
+
+  if (window.addEventListener) {
+    window.addEventListener('resize', () => render());
+    window.addEventListener('beforeprint', () => render());
+    window.addEventListener('afterprint', () => render());
+  }
 
   // ---------- boot ----------
   function boot() {

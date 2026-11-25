@@ -134,6 +134,20 @@ test('solve IK on current pose converges', () => {
   h.dispose();
 });
 
+test('solve IK on a boundary pose uses the current arm as a seed', () => {
+  const h = fresh();
+  for (let i = 0; i < 6; i++) {
+    const input = h.get('j' + i);
+    input.value = input.max;
+    input.dispatchEvent({ type: 'input', bubbles: true });
+  }
+  h.get('targetFromPoseBtn').click();
+  assert.ok((h.get('tgtX').value.split('.')[1] || '').length >= 6);
+  h.get('solveIkBtn').click();
+  assert.match(h.get('statusLine').textContent, /converged/);
+  h.dispose();
+});
+
 test('solve IK on a far target reports a stall without throwing', () => {
   const h = fresh();
   h.get('tgtX').value = '5';

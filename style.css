@@ -178,3 +178,20 @@ td { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.76rem; 
 @media (prefers-reduced-motion: reduce) {
   .btn, .risk-bar { transition: none; }
 }
+
+@media print {
+  :root, :root[data-theme="dark"] {
+    --bg: #ffffff; --surface: #ffffff; --surface-2: #ffffff; --text: #111111;
+    --muted: #333333; --border: #8a8a8a; --grid: #c8c8c8; --shadow: none;
+  }
+  body { background: #ffffff !important; color: #111111 !important; }
+  .skip-link, .topbar-actions, .help-panel, .controls-panel, .export-buttons, button, select, input, textarea { display: none !important; }
+  .topbar, .layout, .footer { padding-left: 0 !important; padding-right: 0 !important; }
+  .layout { display: block !important; }
+  .panel { box-shadow: none !important; border-color: #8a8a8a !important; break-inside: avoid; margin-bottom: 12px; }
+  canvas, svg { max-width: 100% !important; }
+  .table-scroll { max-height: none !important; overflow: visible !important; }
+  table { width: 100% !important; table-layout: fixed !important; font-size: 0.62rem !important; }
+  th, td { padding: 3px 4px !important; overflow-wrap: anywhere !important; }
+  pre { white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
+}
