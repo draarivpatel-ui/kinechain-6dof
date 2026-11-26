@@ -81,7 +81,7 @@ Run the test suite (Node 22+, no packages to install):
 npm test
 ```
 
-Verified: 366 tests, 366 passing, 0 failures. The suite covers transform
+Verified: 367 tests, 367 passing, 0 failures. The suite covers transform
 and quaternion identities, forward kinematics against hand-checked poses,
 Jacobian analytical versus central finite-difference parity below 1e-5,
 manipulability properties, singularity detection at elbow and wrist
