@@ -705,3 +705,12 @@ for (const name of ['PUMA-560', 'UR5e', 'SCARA-4']) {
     assert.ok(rep.total >= 10);
   });
 }
+
+
+test('batch4 waypoint label truncation never splits an emoji surrogate pair', () => {
+  const label = 'x'.repeat(39) + '\u{1f600}' + 'tail';
+  const w = K.normalizeSeqWaypoint({ t: [0.1, 0.2, 0.3], label }, 0);
+  assert.equal(Array.from(w.label).length, 40);
+  assert.equal(w.label.includes('\uFFFD'), false);
+  assert.equal(Array.from(w.label).at(-1), String.fromCodePoint(0x1f600));
+});

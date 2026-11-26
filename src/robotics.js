@@ -2247,7 +2247,7 @@
     else if (w && Number.isFinite(w.x) && Number.isFinite(w.y) && Number.isFinite(w.z)) t = [w.x, w.y, w.z];
     if (!t || t.length !== 3) throw new RangeError('waypoint ' + i + ' needs three Cartesian coordinates');
     for (let k = 0; k < 3; k++) if (!Number.isFinite(t[k])) throw new RangeError('waypoint ' + i + ' has a nonfinite coordinate');
-    const label = w && typeof w.label === 'string' && w.label.trim() ? w.label.trim().slice(0, 40) : 'W' + (i + 1);
+    const label = w && typeof w.label === 'string' && w.label.trim() ? Array.from(w.label.trim()).slice(0, 40).join('') : 'W' + (i + 1);
     const dwell = w && Number.isFinite(w.dwell) ? clamp(w.dwell, 0, 60) : 0;
     return { t: t.slice(0, 3), label: label, dwell: dwell };
   }
